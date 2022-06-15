@@ -561,7 +561,11 @@ class quantized_bits(BaseQuantizer):  # pylint: disable=invalid-name
     # quantized_bits with "1" bit becomes a binary implementation.
     unsigned_bits = self.bits - self.keep_negative
     m = K.cast_to_floatx(pow(2, unsigned_bits))
-    m_i = K.cast_to_floatx(K.pow(2, self.integer))
+    if self.integer >= 0:
+      m_i = K.cast_to_floatx(K.pow(2, self.integer))
+    else:
+      m_i = K.cast_to_floatx(1/K.pow(2, -self.integer))
+
 
     if self.alpha is None:
       scale = 1.0
