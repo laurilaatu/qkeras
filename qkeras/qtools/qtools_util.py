@@ -194,6 +194,13 @@ def get_operation_count(layer, input_shape):
 
     operation_count = (size_i * size_o)
 
+  elif layer.__class__.__name__ in ["QSimpleRNN", "SimpleRNN"]:
+    output_shape = layer.compute_output_shape(input_shape)
+    _, time_i, size_i = input_shape
+    _, size_o = output_shape
+
+    operation_count = (time_i * size_i + time_i * size_o  * size_o)
+
   else:
     print("operation count for {} is defaulted to 0".format(
         layer))
