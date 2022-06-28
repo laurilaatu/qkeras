@@ -41,6 +41,9 @@ LayerDataType = collections.namedtuple(
 
         "weight_quantizer",
         "w_shapes",
+        
+        "recurrent_quantizer",
+        "r_shapes",
 
         "bias_quantizer",
         "b_shapes",
@@ -57,14 +60,14 @@ QKERAS_LAYERS = [
     "QConv1D",
     "QConv2D",
     "QDepthwiseConv2D",
-]
+    ]
 
 KERAS_LAYERS = [
     "Dense",
     "Conv1D",
     "Conv2D",
     "DepthwiseConv2D",
-]
+    ]
 
 
 def get_bn_quantizers(layer, quantizer_factory, cfg, keras_quantizer,
@@ -635,7 +638,7 @@ def generate_layer_data_type_map(
             qkeras_weight_quantizer)
         bias_quantizer = quantizer_factory.make_quantizer(
             qkeras_bias_quantizer)
-
+    
       # TODO(lishanok): During inference, if weight and bias is po2,
       #  need to update corresponding quantizer type with min and max
       #  of the constant values.
@@ -647,6 +650,89 @@ def generate_layer_data_type_map(
 
         if bias_quantizer.is_po2:
           bias_quantizer.update_inference_values(weights[1])
+
+      multiplier_factory = quantized_operators.MultiplierFactory()
+      multiplier = multiplier_factory.make_multiplier(
+          weight_quantizer, input_quantizer)
+
+      enable_bn_fusing = (
+          hw_weight_dict is not None and hw_weight_dict.get(layer.name, None)
+          and hw_weight_dict[layer.name].get("enable_bn_fusing", None))
+
+      if enable_bn_fusing and qkeras_weight_quantizer:
+        # When conv layer is fused wiht bn, multiplier bitwidth is ajusted by
+        # kernel quantizer scale values (for auto_po2 type of quantizer only).
+        # For conv layer without fusing, multiplier bitwidth is not adjusted
+        # even if auto_po2 is used in quantizer. Instead, we directly adjusted
+        # the accumulator and store that in fused_accumulator.
+        qtools_util.adjust_multiplier_for_auto_po2(
+            multiplier, qkeras_weight_quantizer)
+
+      weights = layer.get_weights()
+      kernel = weights[0]
+
+      kernel_shape = kernel.shape
+      # depthwise_kernel_shape = kernel_size + (input_dim, depth_multiplier)
+      # When computing accumulator bitwidth for dw conv2d layer, we do not
+      # need to count the last two dimensions
+
+    # If QSimpleRNN or SimpleRNN
+    elif node_type in ["QSimpleRNN", "SimpleRNN"]:
+      (input_quantizer, _) = input_qe_list[0]
+
+      if for_reference or not hasattr(layer, "get_quantizers"):
+        # for_reference: force all quantizers to keras_quantizer
+        weight_quantizer = quantizer_factory.make_default_quantizer(
+            mode=cfg.default_interm_quantizer)
+        recurrent_quantizer = quantizer_factory.make_default_quantizer(
+            mode=cfg.default_interm_quantizer)
+        bias_quantizer = quantizer_factory.make_default_quantizer(
+            mode=cfg.default_interm_quantizer)
+
+        if keras_quantizer:
+          weight_quantizer = quantizer_factory.make_default_quantizer(
+              mode=keras_quantizer)
+          recurrent_quantizer = quantizer_factory.make_default_quantizer(
+              mode=keras_quantizer)
+          bias_quantizer = quantizer_factory.make_default_quantizer(
+              mode=keras_quantizer)
+      else:
+        # qkeras layer
+        qkeras_weight_quantizer = layer.get_quantizers()[0]
+        qkeras_weight_quantizer = layer.get_quantizers()[1]
+        qkeras_bias_quantizer = layer.get_quantizers()[2]
+
+        if not quantizer_factory.is_quantizer_supported(
+            qkeras_weight_quantizer):
+          raise TagMissingError(
+              "Unsupported weight quantizer {} on this layer: {}".format(
+                  qkeras_weight_quantizer, layer))
+
+        if not quantizer_factory.is_quantizer_supported(
+            qkeras_bias_quantizer):
+          raise TagMissingError(
+              "Unsupported bias quantizer {} on this layer: {}".format(
+                  qkeras_bias_quantizer, layer))
+
+        weight_quantizer = quantizer_factory.make_quantizer(
+            qkeras_weight_quantizer)
+        bias_quantizer = quantizer_factory.make_quantizer(
+            qkeras_bias_quantizer)
+
+      # TODO(lishanok): During inference, if weight and bias is po2,
+      #  need to update corresponding quantizer type with min and max
+      #  of the constant values.
+      if is_inference:
+        weights = qtools_util.get_weights(
+            layer, model_weights_already_quantized)
+        if weight_quantizer.is_po2:
+          weight_quantizer.update_inference_values(weights[0])
+
+        if recurrent_quantizer.is_po2:
+          recurrent_quantizer.update_inference_values(weights[1])
+          
+        if bias_quantizer.is_po2:
+          bias_quantizer.update_inference_values(weights[2])
 
       multiplier_factory = quantized_operators.MultiplierFactory()
       multiplier = multiplier_factory.make_multiplier(
